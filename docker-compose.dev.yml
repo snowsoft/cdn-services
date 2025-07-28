@@ -1,0 +1,102 @@
+services:
+  # Development app with hot reload
+  app-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        - NODE_ENV=development
+    image: cdn-services:dev
+    container_name: cdn-services-dev
+    ports:
+      - "3010:3000"
+      - "9229:9229"  # Node.js debugger port
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://devuser:devpass@db-dev:5432/cdn-services_dev
+      - REDIS_URL=redis://cache-dev:6379
+      - DEBUG=app:*
+      - LOG_LEVEL=debug
+    volumes:
+      # Mount source code for hot reload
+      - ./src:/app/src
+      - ./package.json:/app/package.json
+      - ./package-lock.json:/app/package-lock.json
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./nodemon.json:/app/nodemon.json
+      # Exclude node_modules
+      - /app/node_modules
+    depends_on:
+      - db-dev
+      - cache-dev
+    networks:
+      - dev-network
+    command: npm run dev
+
+  # Development database with data persistence
+  db-dev:
+    image: postgres:15-alpine
+    container_name: cdn-services-db-dev
+    environment:
+      - POSTGRES_USER=devuser
+      - POSTGRES_PASSWORD=devpass
+      - POSTGRES_DB=cdn-services_dev
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./scripts/init-dev-db.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - dev-network
+
+  # Development cache
+  cache-dev:
+    image: redis:7-alpine
+    container_name: cdn-services-cache-dev
+    command: redis-server --loglevel debug
+    ports:
+      - "6379:6379"
+    networks:
+      - dev-network
+
+  # Mailhog for email testing
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: cdn-services-mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - dev-network
+
+  # Adminer for database management
+  adminer:
+    image: adminer:latest
+    container_name: cdn-services-adminer
+    ports:
+      - "8080:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=db-dev
+    depends_on:
+      - db-dev
+    networks:
+      - dev-network
+
+  # Documentation server
+  docs:
+    image: nginx:alpine
+    container_name: cdn-services-docs
+    volumes:
+      - ./docs:/usr/share/nginx/html:ro
+    ports:
+      - "8090:80"
+    networks:
+      - dev-network
+
+volumes:
+  postgres_dev_data:
+
+networks:
+  dev-network:
+    driver: bridge

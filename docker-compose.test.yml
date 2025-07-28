@@ -1,0 +1,101 @@
+services:
+  # Test runner
+  app-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder  # Use builder stage for tests
+      args:
+        - NODE_ENV=test
+    image: cdn-services:test
+    container_name: cdn-services-test
+    environment:
+      - NODE_ENV=test
+      - DATABASE_URL=postgresql://testuser:testpass@db-test:5432/cdn-services_test
+      - REDIS_URL=redis://cache-test:6379
+      - JWT_SECRET=test-secret-key
+      - LOG_LEVEL=error
+      - CI=true
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./coverage:/app/coverage
+      - ./jest.config.js:/app/jest.config.js
+      - ./.eslintrc.js:/app/.eslintrc.js
+    depends_on:
+      db-test:
+        condition: service_healthy
+      cache-test:
+        condition: service_healthy
+    networks:
+      - test-network
+    command: >
+      sh -c "
+        npm run lint &&
+        npm run test:unit &&
+        npm run test:integration &&
+        npm run test:e2e
+      "
+
+  # Test database
+  db-test:
+    image: postgres:15-alpine
+    container_name: cdn-services-db-test
+    environment:
+      - POSTGRES_USER=testuser
+      - POSTGRES_PASSWORD=testpass
+      - POSTGRES_DB=cdn-services_test
+    ports:
+      - "5433:5432"
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d cdn-services_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    tmpfs:
+      - /var/lib/postgresql/data  # Use tmpfs for faster tests
+
+  # Test cache
+  cache-test:
+    image: redis:7-alpine
+    container_name: cdn-services-cache-test
+    ports:
+      - "6380:6379"
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Selenium for E2E tests
+  selenium:
+    image: selenium/standalone-chrome:latest
+    container_name: cdn-services-selenium
+    ports:
+      - "4444:4444"
+      - "7900:7900"  # noVNC web viewer
+    shm_size: 2gb
+    environment:
+      - SE_NODE_MAX_SESSIONS=5
+      - SE_NODE_SESSION_TIMEOUT=300
+    networks:
+      - test-network
+
+  # Test report server
+  test-reports:
+    image: nginx:alpine
+    container_name: cdn-services-test-reports
+    volumes:
+      - ./coverage:/usr/share/nginx/html:ro
+    ports:
+      - "8091:80"
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge

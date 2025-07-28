@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  cdn-services:
+    build: .
+    image: cdn-services:latest
+    container_name: cdn-services
+    ports:
+      - "3012:3012"
+    environment:
+      - NODE_ENV=development  # development olarak değiştirdik
+      - PORT=3012
+      - SERVICE_NAME=cdn-services
+      - DATABASE_URL=postgresql://user:password@cdn-services-db:5432/cdndb
+      - REDIS_URL=redis://cdn-services-cache:6379
+      - CORS_ORIGIN=*  # Tüm origin'lere izin ver
+    volumes:
+      - ./uploads:/app/uploads
+      - ./cache:/app/cache
+    depends_on:
+      - cdn-services-db
+      - cdn-services-cache
+    restart: unless-stopped
+    networks:
+      - cdn-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3012/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  cdn-services-db:
+    image: postgres:15-alpine
+    container_name: cdn-services-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=cdndb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5440:5432"
+    networks:
+      - cdn-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d cdndb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  cdn-services-cache:
+    image: redis:7-alpine
+    container_name: cdn-services-cache
+    restart: unless-stopped
+    ports:
+      - "6381:6379"
+    networks:
+      - cdn-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    name: cdn-services-postgres-data
+
+networks:
+  cdn-network:
+    driver: bridge
+    name: cdn-services-network

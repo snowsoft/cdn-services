@@ -1,0 +1,33 @@
+{
+  "verbose": false,
+  "watch": [
+    "src/**/*",
+    ".env"
+  ],
+  "ignore": [
+    "**/*.test.js",
+    "**/*.spec.js",
+    "node_modules",
+    "logs",
+    "coverage",
+    "dist",
+    ".git"
+  ],
+  "ext": "js,json,ts,yaml,yml",
+  "delay": 1000,
+  "env": {
+    "NODE_ENV": "development",
+    "DEBUG": "app:*"
+  },
+  "execMap": {
+    "js": "node",
+    "ts": "ts-node"
+  },
+  "events": {
+    "start": "echo '\\n🚀 Application starting...'",
+    "restart": "echo '\\n🔄 Application restarting due to changes...'",
+    "crash": "echo '\\n💥 Application crashed! Waiting for file changes...'"
+  },
+  "restartable": "rs",
+  "colours": true
+}

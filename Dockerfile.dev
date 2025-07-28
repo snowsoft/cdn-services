@@ -1,0 +1,27 @@
+# Development Dockerfile with hot reload support
+FROM node:18-alpine
+
+# Install basic tools
+RUN apk add --no-cache git bash
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install all dependencies
+RUN npm install
+
+# Install nodemon globally for hot reload
+RUN npm install -g nodemon
+
+# Expose ports
+EXPOSE 3012 9229
+
+# Set environment
+ENV NODE_ENV=development
+ENV CHOKIDAR_USEPOLLING=true
+
+# Use nodemon for hot reload
+CMD ["nodemon", "--inspect=0.0.0.0:9229", "src/index.js"]
