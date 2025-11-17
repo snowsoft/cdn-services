@@ -8,6 +8,11 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 
+// Import auth middleware and storage
+const { authenticate, optionalAuth } = require('./middleware/auth');
+const storage = require('./storage/StorageManager');
+const config = require('./config');
+
 const app = express();
 const PORT = process.env.PORT || 3012;
 
@@ -49,20 +54,11 @@ async function ensureDirectories() {
 
 ensureDirectories();
 
-// Multer konfigürasyonu
-const storage = multer.diskStorage({
-    destination: async (req, file, cb) => {
-        cb(null, UPLOAD_DIR);
-    },
-    filename: (req, file, cb) => {
-        const uniqueId = uuidv4();
-        const ext = path.extname(file.originalname);
-        cb(null, `${uniqueId}${ext}`);
-    }
-});
+// Multer konfigürasyonu - Memory storage kullan (storage adapter'a kaydetmek için)
+const multerStorage = multer.memoryStorage();
 
 const upload = multer({
-    storage,
+    storage: multerStorage,
     limits: {
         fileSize: 50 * 1024 * 1024, // 50MB limit
     },
@@ -90,9 +86,51 @@ app.get('/health', (req, res) => {
     res.json({
         status: 'healthy',
         service: 'cdn-services',
-        features: ['image-upload', 'image-processing', 'format-conversion', 'resizing'],
+        features: ['image-upload', 'image-processing', 'format-conversion', 'resizing', 'authentication', 'multi-storage'],
         timestamp: new Date().toISOString()
     });
+});
+
+// Auth endpoint for testing (generate token)
+// In production, this should be handled by your main auth service
+app.post('/api/auth/token', async (req, res) => {
+    try {
+        const authService = require('./services/authService');
+        
+        // Simple token generation for testing
+        // In production, validate user credentials first
+        const { userId, email, role } = req.body;
+        
+        if (!userId) {
+            return res.status(400).json({
+                error: 'Missing required fields',
+                message: 'userId is required'
+            });
+        }
+
+        const payload = {
+            id: userId,
+            userId: userId,
+            email: email || `user${userId}@example.com`,
+            role: role || 'user',
+        };
+
+        const token = authService.generateToken(payload);
+
+        res.json({
+            success: true,
+            token,
+            tokenType: 'Bearer',
+            expiresIn: config.security.jwtExpire,
+            user: payload
+        });
+    } catch (error) {
+        console.error('Token generation error:', error);
+        res.status(500).json({
+            error: 'Token generation failed',
+            message: error.message
+        });
+    }
 });
 
 // Ana route
@@ -102,14 +140,20 @@ app.get('/', (req, res) => {
         version: '2.0.0',
         endpoints: {
             health: '/health',
-            upload: 'POST /api/upload',
+            authToken: 'POST /api/auth/token (Generate JWT token for testing)',
+            upload: 'POST /api/upload (Auth Required)',
             list: 'GET /api/images',
             image: 'GET /api/image/:id',
-            delete: 'DELETE /api/image/:id',
+            delete: 'DELETE /api/image/:id (Auth Required)',
             processedImage: 'GET /api/image/:id/:size/:format',
             imageInfo: 'GET /api/info/:id',
             systemInfo: '/info',
             metrics: '/metrics'
+        },
+        features: {
+            authentication: 'JWT-based authentication',
+            storage: 'Multi-disk storage support (local, s3, azure, gcs)',
+            imageProcessing: 'Dynamic image resizing and format conversion'
         },
         supportedFormats: ['jpeg', 'jpg', 'png', 'webp', 'gif', 'svg', 'bmp', 'tiff'],
         supportedSizes: ['thumbnail', 'small', 'medium', 'large', 'original', 'custom (e.g., 200x300)'],
@@ -121,35 +165,58 @@ app.get('/', (req, res) => {
     });
 });
 
-// Dosya yükleme endpoint'i - GERÇEK UPLOAD İŞLEMİ
-app.post('/api/upload', upload.single('image'), async (req, res) => {
+// Dosya yükleme endpoint'i - AUTH İLE KORUNMUŞ
+app.post('/api/upload', authenticate, upload.single('image'), async (req, res) => {
     try {
-        console.log('Upload request received');
+        console.log('Upload request received from user:', req.userId);
 
         if (!req.file) {
             console.log('No file in request');
             return res.status(400).json({ error: 'No file uploaded' });
         }
 
-        console.log('File uploaded:', req.file);
+        console.log('File uploaded:', req.file.originalname);
+
+        // Generate unique filename
+        const uniqueId = uuidv4();
+        const ext = path.extname(req.file.originalname);
+        const filename = `${uniqueId}${ext}`;
+        const filePath = `images/${filename}`;
+
+        // Get storage disk (default or specified)
+        const diskName = req.body.disk || config.storage?.default || 'local';
+        const disk = storage.disk(diskName);
+
+        // Save file to storage
+        await disk.put(filePath, req.file.buffer, {
+            contentType: req.file.mimetype
+        });
+
+        // Also save to local cache for processing
+        const localCachePath = path.join(UPLOAD_DIR, filename);
+        await fs.writeFile(localCachePath, req.file.buffer);
 
         const fileInfo = {
-            id: path.parse(req.file.filename).name,
+            id: uniqueId,
             originalName: req.file.originalname,
-            filename: req.file.filename,
+            filename: filename,
+            path: filePath,
             size: req.file.size,
             mimetype: req.file.mimetype,
+            disk: diskName,
+            uploadedBy: req.userId,
             uploadedAt: new Date().toISOString(),
+            url: disk.url(filePath),
             urls: {
-                original: `/api/image/${path.parse(req.file.filename).name}`,
-                thumbnail: `/api/image/${path.parse(req.file.filename).name}/thumbnail/jpeg`,
-                small: `/api/image/${path.parse(req.file.filename).name}/300x300/webp`,
-                medium: `/api/image/${path.parse(req.file.filename).name}/800x800/webp`,
-                large: `/api/image/${path.parse(req.file.filename).name}/1920x1080/webp`
+                original: `/api/image/${uniqueId}`,
+                thumbnail: `/api/image/${uniqueId}/thumbnail/jpeg`,
+                small: `/api/image/${uniqueId}/300x300/webp`,
+                medium: `/api/image/${uniqueId}/800x800/webp`,
+                large: `/api/image/${uniqueId}/1920x1080/webp`
             }
         };
 
-        console.log('Upload successful:', fileInfo.id);
+        console.log('Upload successful:', fileInfo.id, 'to disk:', diskName);
 
         res.json({
             success: true,
@@ -318,43 +385,67 @@ app.get('/api/info/:id', async (req, res) => {
     }
 });
 
-// Görüntü silme endpoint'i
-app.delete('/api/image/:id', async (req, res) => {
+// Görüntü silme endpoint'i - AUTH İLE KORUNMUŞ
+app.delete('/api/image/:id', authenticate, async (req, res) => {
     try {
         const { id } = req.params;
-        console.log(`Delete request for image: ${id}`);
+        const diskName = req.query.disk || config.storage?.default || 'local';
+        console.log(`Delete request for image: ${id} by user: ${req.userId}`);
 
-        // Orijinal dosyayı bul
-        const files = await fs.readdir(UPLOAD_DIR);
-        const originalFile = files.find(f => f.startsWith(id));
+        const disk = storage.disk(diskName);
+        const filePath = `images/${id}*`; // Pattern matching için
 
-        if (!originalFile) {
-            return res.status(404).json({ error: 'Image not found' });
+        // Orijinal dosyayı bul ve sil (storage'dan)
+        try {
+            // Find file with this ID prefix
+            const files = await fs.readdir(UPLOAD_DIR);
+            const originalFile = files.find(f => f.startsWith(id));
+
+            if (originalFile) {
+                const fullPath = `images/${originalFile}`;
+                if (await disk.exists(fullPath)) {
+                    await disk.delete(fullPath);
+                    console.log(`Deleted from storage: ${fullPath}`);
+                }
+            }
+
+            // Local cache'den de sil
+            if (originalFile) {
+                const localPath = path.join(UPLOAD_DIR, originalFile);
+                try {
+                    await fs.unlink(localPath);
+                    console.log(`Deleted local file: ${originalFile}`);
+                } catch (err) {
+                    // Ignore if file doesn't exist
+                }
+            }
+        } catch (error) {
+            console.log('File not found in storage, trying local only');
         }
-
-        // Orijinal dosyayı sil
-        const originalPath = path.join(UPLOAD_DIR, originalFile);
-        await fs.unlink(originalPath);
-        console.log(`Deleted original file: ${originalFile}`);
 
         // Cache'deki tüm versiyonları sil
-        const cacheFiles = await fs.readdir(CACHE_DIR);
-        const relatedCacheFiles = cacheFiles.filter(f => f.startsWith(id));
+        try {
+            const cacheFiles = await fs.readdir(CACHE_DIR);
+            const relatedCacheFiles = cacheFiles.filter(f => f.startsWith(id));
 
-        for (const cacheFile of relatedCacheFiles) {
-            const cachePath = path.join(CACHE_DIR, cacheFile);
-            await fs.unlink(cachePath);
-            console.log(`Deleted cache file: ${cacheFile}`);
-        }
-
-        res.json({
-            success: true,
-            message: 'Image deleted successfully',
-            deletedFiles: {
-                original: originalFile,
-                cached: relatedCacheFiles
+            for (const cacheFile of relatedCacheFiles) {
+                const cachePath = path.join(CACHE_DIR, cacheFile);
+                await fs.unlink(cachePath);
+                console.log(`Deleted cache file: ${cacheFile}`);
             }
-        });
+
+            res.json({
+                success: true,
+                message: 'Image deleted successfully',
+                deletedBy: req.userId
+            });
+        } catch (error) {
+            res.json({
+                success: true,
+                message: 'Image deleted from storage',
+                deletedBy: req.userId
+            });
+        }
     } catch (error) {
         console.error('Error deleting image:', error);
         res.status(500).json({

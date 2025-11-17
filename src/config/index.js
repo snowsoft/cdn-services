@@ -18,13 +18,13 @@ const envVarsSchema = Joi.object({
     API_VERSION: Joi.string().default('v1'),
 
     // Security
-    JWT_SECRET: Joi.string().required().description('JWT secret key'),
+    JWT_SECRET: Joi.string().default('your-secret-key-change-in-production').description('JWT secret key'),
     JWT_EXPIRE: Joi.string().default('7d'),
-    SESSION_SECRET: Joi.string().required(),
+    SESSION_SECRET: Joi.string().default('your-session-secret-change-in-production'),
     BCRYPT_ROUNDS: Joi.number().default(10),
 
     // Database
-    DATABASE_URL: Joi.string().required(),
+    DATABASE_URL: Joi.string(),
     DB_HOST: Joi.string(),
     DB_PORT: Joi.number().default(5432),
     DB_NAME: Joi.string(),
@@ -33,7 +33,7 @@ const envVarsSchema = Joi.object({
     DB_SSL: Joi.boolean().default(false),
 
     // Redis
-    REDIS_URL: Joi.string().required(),
+    REDIS_URL: Joi.string(),
     REDIS_HOST: Joi.string().default('localhost'),
     REDIS_PORT: Joi.number().default(6379),
     REDIS_PASSWORD: Joi.string().allow(''),
@@ -51,6 +51,21 @@ const envVarsSchema = Joi.object({
     AWS_SECRET_ACCESS_KEY: Joi.string(),
     AWS_REGION: Joi.string().default('us-east-1'),
     S3_BUCKET: Joi.string(),
+
+    // Storage
+    STORAGE_DEFAULT: Joi.string().default('local'),
+    STORAGE_LOCAL_ROOT: Joi.string().default('storage'),
+    STORAGE_LOCAL_URL: Joi.string().default('/storage'),
+    STORAGE_S3_BUCKET: Joi.string(),
+    STORAGE_S3_REGION: Joi.string().default('us-east-1'),
+    STORAGE_S3_URL: Joi.string(),
+    STORAGE_AZURE_CONTAINER: Joi.string().default('files'),
+    STORAGE_AZURE_CONNECTION_STRING: Joi.string(),
+    STORAGE_AZURE_URL: Joi.string(),
+    STORAGE_GCS_BUCKET: Joi.string(),
+    STORAGE_GCS_PROJECT_ID: Joi.string(),
+    STORAGE_GCS_KEY_FILENAME: Joi.string(),
+    STORAGE_GCS_URL: Joi.string(),
 
     // Monitoring
     SENTRY_DSN: Joi.string(),
@@ -159,4 +174,56 @@ module.exports = {
 
     corsOrigin: envVars.CORS_ORIGIN,
     logLevel: envVars.LOG_LEVEL,
+
+    storage: {
+        default: envVars.STORAGE_DEFAULT,
+        local: {
+            root: envVars.STORAGE_LOCAL_ROOT,
+            url: envVars.STORAGE_LOCAL_URL,
+        },
+        disks: {
+            local: {
+                driver: 'local',
+                config: {
+                    root: envVars.STORAGE_LOCAL_ROOT,
+                    url: envVars.STORAGE_LOCAL_URL,
+                },
+            },
+            ...(envVars.STORAGE_S3_BUCKET && {
+                s3: {
+                    driver: 's3',
+                    config: {
+                        bucket: envVars.STORAGE_S3_BUCKET,
+                        region: envVars.STORAGE_S3_REGION,
+                        url: envVars.STORAGE_S3_URL,
+                        credentials: envVars.AWS_ACCESS_KEY_ID && envVars.AWS_SECRET_ACCESS_KEY ? {
+                            key: envVars.AWS_ACCESS_KEY_ID,
+                            secret: envVars.AWS_SECRET_ACCESS_KEY,
+                        } : undefined,
+                    },
+                },
+            }),
+            ...(envVars.STORAGE_AZURE_CONNECTION_STRING && {
+                azure: {
+                    driver: 'azure',
+                    config: {
+                        container: envVars.STORAGE_AZURE_CONTAINER,
+                        connectionString: envVars.STORAGE_AZURE_CONNECTION_STRING,
+                        url: envVars.STORAGE_AZURE_URL,
+                    },
+                },
+            }),
+            ...(envVars.STORAGE_GCS_BUCKET && {
+                gcs: {
+                    driver: 'gcs',
+                    config: {
+                        bucket: envVars.STORAGE_GCS_BUCKET,
+                        projectId: envVars.STORAGE_GCS_PROJECT_ID,
+                        keyFilename: envVars.STORAGE_GCS_KEY_FILENAME,
+                        url: envVars.STORAGE_GCS_URL,
+                    },
+                },
+            }),
+        },
+    },
 };
